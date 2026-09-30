@@ -1,6 +1,9 @@
 PARROT CLICKER
 ==============
 
+Hostname: parrot.yourmomon.top
+(not parrots)
+
 Same hosting shape as Momon and Take-Home: the app container does not
 grab ports 80 or 443. It listens on 127.0.0.1:3060 and piggybacks the
 Caddy you already run.
@@ -10,20 +13,13 @@ Caddy you already run.
   3080  Momon
   3090  Eye tracker
 
-Point DNS (A record) for the hostname at this machine first.
+Point DNS (A record) for parrot.yourmomon.top at this machine first.
 
-Install on the VPS:
+Install — no git, no GitHub username:
 
-  git clone https://github.com/dozer54321/parrot-clicker.git
-  cd parrot-clicker
-  sudo ./deploy/vps/install.sh parrots.yourmomon.top
-
-The repo is private. Clone and the auto-updater both need read access
-(deploy key, or gh auth login for root).
-
-Docker already installed:
-
-  ./deploy/vps/start.sh parrots.yourmomon.top
+  sudo apt-get update && sudo apt-get install -y curl
+  curl -fsSL -o /tmp/parrot-install.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/bootstrap.sh
+  sudo bash /tmp/parrot-install.sh
 
 What start.sh does:
 
@@ -33,16 +29,14 @@ What start.sh does:
 
 Auto-update:
 
-  install.sh enables parrot-update.timer. Every 2 minutes it checks
-  GitHub. A new commit on main is pulled and the container is rebuilt.
-  Browser saves stay in the browser.
+  A push to main publishes a public image. parrot-update.timer loads it
+  about every 2 minutes. The VPS never logs into GitHub.
 
   systemctl status parrot-update.timer
   journalctl -u parrot-update.service -n 40 --no-pager
-  sudo ./deploy/vps/update.sh
 
 Repair the site block without rebuilding:
 
-  sudo ./deploy/vps/repair.sh parrots.yourmomon.top
+  sudo ./deploy/vps/repair.sh parrot.yourmomon.top
 
 The flock is saved in the browser. backups/ only keeps parrot.env.

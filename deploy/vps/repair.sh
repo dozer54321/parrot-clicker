@@ -1,6 +1,6 @@
 #!/bin/bash
 # Re-attach Parrot Clicker to the Caddy already on this machine.
-# Usage: sudo ./repair.sh parrots.yourmomon.top
+# Usage: sudo ./repair.sh parrot.yourmomon.top
 set -euo pipefail
 
 DOMAIN="${1:-}"
@@ -14,7 +14,7 @@ if [ -z "$DOMAIN" ] && [ -f "$ROOT/parrot.env" ]; then
   DOMAIN="$(grep '^PARROT_DOMAIN=' "$ROOT/parrot.env" | head -1 | cut -d= -f2-)"
 fi
 if [ -z "$DOMAIN" ]; then
-  echo "Usage: sudo ./repair.sh parrots.yourmomon.top"
+  echo "Usage: sudo ./repair.sh parrot.yourmomon.top"
   exit 1
 fi
 

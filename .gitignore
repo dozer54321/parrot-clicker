@@ -15,3 +15,4 @@ docker-compose.override.yml
 .grok/preview.log
 .grok/og-pending
 .update.lock
+.autoupdate-rev

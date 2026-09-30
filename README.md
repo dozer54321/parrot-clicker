@@ -2,22 +2,24 @@
 
 Tap the macaw. Buy roosts. The flock keeps making parrots while you are gone.
 
+Live site: [parrot.yourmomon.top](https://parrot.yourmomon.top)
+
 ## Install
 
-Point a DNS A record at the VPS first. The app does not take ports 80 or 443 when Caddy is already running. It listens on `127.0.0.1:3060` and piggybacks that Caddy (same layout as Momon and Take-Home).
+Point a DNS A record for `parrot.yourmomon.top` at the VPS first. The app does not take ports 80 or 443 when Caddy is already running. It listens on `127.0.0.1:3060` and piggybacks that Caddy.
+
+This does not use git and does not ask for a GitHub username.
 
 ```bash
-git clone https://github.com/dozer54321/parrot-clicker.git
-cd parrot-clicker
-sudo ./deploy/vps/install.sh parrots.yourmomon.top
+sudo apt-get update && sudo apt-get install -y curl
+curl -fsSL -o /tmp/parrot-install.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/bootstrap.sh
+sudo bash /tmp/parrot-install.sh
 ```
 
-This repo is private. The VPS needs read access before `git clone` and before later pulls — a read-only deploy key, or `gh auth login` as the user that will run the timer (root, if you install with sudo).
-
-Docker is already installed and the repo is already on the machine:
+That installs for `parrot.yourmomon.top`. Already unpacked on the machine:
 
 ```bash
-./deploy/vps/start.sh parrots.yourmomon.top
+sudo ./deploy/vps/install.sh
 ```
 
 | Port | App |
@@ -36,25 +38,22 @@ Docker is already installed and the repo is already on the machine:
 Re-apply the site block without a rebuild:
 
 ```bash
-sudo ./deploy/vps/repair.sh parrots.yourmomon.top
+sudo ./deploy/vps/repair.sh parrot.yourmomon.top
 ```
 
 Player saves stay in the browser. `backups/` only keeps `parrot.env`.
 
 ## Auto-update
 
-`install.sh` / `start.sh` (as root) enable `parrot-update.timer`. Every 2 minutes it fetches `main`. When GitHub has a new commit it resets to that commit and runs `docker compose up -d --build`. Nothing else on the box is rebuilt. Browser flocks are not touched.
+Every push to `main` publishes a public image. The VPS checks about every 2 minutes and loads it. No clone, no token, no username prompt.
 
 ```bash
 systemctl status parrot-update.timer
 journalctl -u parrot-update.service -n 40 --no-pager
-sudo ./deploy/vps/update.sh
 ```
 
-Push to `main` on [dozer54321/parrot-clicker](https://github.com/dozer54321/parrot-clicker) and the installed copy follows.
-
-No systemd (cron instead):
+If the timer was never installed:
 
 ```bash
-*/2 * * * * /path/to/parrot-clicker/deploy/vps/update.sh
+sudo /opt/parrot-clicker/deploy/vps/update.sh --install-timer
 ```

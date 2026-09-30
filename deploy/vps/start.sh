@@ -1,11 +1,11 @@
 #!/bin/bash
 # Parrot Clicker — start next to an existing Caddy, or with our own Caddy container.
-# Usage: ./start.sh parrots.yourmomon.top
+# Usage: ./start.sh parrot.yourmomon.top
 set -euo pipefail
 
 DOMAIN="${1:-}"
 if [ -z "$DOMAIN" ]; then
-  echo "Usage: ./start.sh parrots.yourmomon.top"
+  echo "Usage: ./start.sh parrot.yourmomon.top"
   exit 1
 fi
 
