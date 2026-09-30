@@ -2,8 +2,10 @@
 # Host Caddy proxies 127.0.0.1:3060. Docker Caddy proxies parrot-app on its network.
 # Wrapped in begin/end markers so a re-run replaces this block instead of duplicating it.
 
+# www is included only when that name has DNS. A missing www record
+# makes certificate issuance fail and the browser says the connection failed.
 # begin-parrot
-parrot.yourmomon.top, www.parrot.yourmomon.top {
+parrot.yourmomon.top {
 	encode gzip
 	reverse_proxy parrot-app:3000
 }

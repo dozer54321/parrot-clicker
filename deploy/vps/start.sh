@@ -148,7 +148,7 @@ else
 fi
 
 echo
-echo "Open https://${DOMAIN}  (and https://www.${DOMAIN})"
+echo "Open https://${DOMAIN}"
 echo "App container: parrot-app    localhost port: ${PARROT_PORT:-3060}"
 echo
 echo "Logs:   docker compose --env-file parrot.env logs -f app"

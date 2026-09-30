@@ -97,14 +97,28 @@ parrot_write_site() {
   mkdir -p "$(dirname "$caddyfile")"
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$caddyfile" "$domain" "$target" <<'PY'
-import pathlib, re, sys
+import pathlib, re, socket, sys
 path = pathlib.Path(sys.argv[1])
 domain = sys.argv[2]
 target = sys.argv[3]
+
+def resolves(host):
+    try:
+        socket.getaddrinfo(host, 443)
+        return True
+    except OSError:
+        return False
+
+# www with no DNS makes Let's Encrypt refuse the whole certificate,
+# and the browser then reports "Secure connection failed".
+names = [domain]
 www = f"www.{domain}"
+if www != domain and resolves(www):
+    names.append(www)
+addr = ", ".join(names)
 block = (
     "# begin-parrot\n"
-    f"{domain}, {www} {{\n"
+    f"{addr} {{\n"
     "\tencode gzip\n"
     f"\treverse_proxy {target}\n"
     "}\n"
@@ -112,25 +126,28 @@ block = (
 )
 text = path.read_text() if path.exists() else ""
 text = re.sub(r"(?ms)^# begin-parrot\n.*?# end-parrot\n?", "", text)
-pattern = re.compile(
-    rf"(?m)^(?:{re.escape(domain)}|{re.escape(www)})(?:,[^\n]*)?\s*\{{[\s\S]*?^\}}\s*"
-)
+alts = "|".join(re.escape(n) for n in (domain, www))
+pattern = re.compile(rf"(?m)^(?:{alts})(?:,[^\n]*)?\s*\{{[\s\S]*?^\}}\s*")
 text, _ = pattern.subn("", text)
 path.write_text(text.rstrip() + "\n\n" + block)
-print(f"Caddy: {domain} + {www} → {target}")
+print(f"Caddy: {addr} → {target}")
 PY
     return
+  fi
+  local addr="$domain"
+  if getent hosts "www.${domain}" >/dev/null 2>&1; then
+    addr="${domain}, www.${domain}"
   fi
   cat >> "$caddyfile" <<EOF
 
 # begin-parrot
-${domain}, www.${domain} {
+${addr} {
 	encode gzip
 	reverse_proxy ${target}
 }
 # end-parrot
 EOF
-  echo "Caddy: ${domain} + www → ${target}"
+  echo "Caddy: ${addr} → ${target}"
 }
 
 parrot_reload_caddy() {

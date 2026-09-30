@@ -43,6 +43,17 @@ sudo ./deploy/vps/repair.sh parrot.yourmomon.top
 
 Player saves stay in the browser. `backups/` only keeps `parrot.env`.
 
+## If the browser says “Secure connection failed”
+
+`www.parrot.yourmomon.top` has no DNS record. A certificate that includes it never issues, and HTTPS dies even though the name itself is fine. On the VPS:
+
+```bash
+curl -fsSL -o /tmp/fix-tls.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/fix-tls.sh
+sudo bash /tmp/fix-tls.sh
+```
+
+Wait about half a minute, then open https://parrot.yourmomon.top again. Add a DNS record for `www` only if you actually want that name.
+
 ## Auto-update
 
 Every push to `main` publishes a public image. The VPS checks about every 2 minutes and loads it. No clone, no token, no username prompt.
