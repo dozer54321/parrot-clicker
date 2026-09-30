@@ -14,4 +14,4 @@ docker-compose.override.yml
 .grok/status
 .grok/preview.log
 .grok/og-pending
-.DS_Store
+.update.lock

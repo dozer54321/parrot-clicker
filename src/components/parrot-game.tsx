@@ -30,7 +30,7 @@ import {
   totalBuildings,
   unitCost,
 } from "@/game/balance";
-import { chirp, gleam } from "@/game/audio";
+import { gleam, squawk } from "@/game/audio";
 import { formatDuration, formatFlock } from "@/game/format";
 import { quoteFor, useGame, type BuyQty } from "@/game/store";
 
@@ -176,7 +176,7 @@ export function ParrotGame() {
 
   function onSquawk(event: React.MouseEvent<HTMLButtonElement>) {
     const gain = game.squawk();
-    chirp(useGame.getState().muted);
+    squawk(useGame.getState().muted);
     const bird = birdRef.current;
     if (bird) {
       bird.classList.remove("parrot-boop");
@@ -224,7 +224,7 @@ export function ParrotGame() {
             type="button"
             onClick={() => game.toggleMute()}
             className="inline-flex size-11 items-center justify-center rounded-full border border-line bg-paper-deep text-ink"
-            aria-label={game.muted ? "Unmute chirps" : "Mute chirps"}
+            aria-label={game.muted ? "Unmute squawks" : "Mute squawks"}
           >
             {game.muted ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
           </button>

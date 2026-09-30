@@ -154,3 +154,8 @@ echo
 echo "Logs:   docker compose --env-file parrot.env logs -f app"
 echo "Stop:   docker compose --env-file parrot.env down"
 echo "Repair: sudo ./deploy/vps/repair.sh ${DOMAIN}"
+if [ "$(id -u)" -eq 0 ]; then
+  "$ROOT/deploy/vps/update.sh" --install-timer
+else
+  echo "Auto-update: sudo ./deploy/vps/update.sh --install-timer"
+fi
