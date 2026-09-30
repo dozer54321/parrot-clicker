@@ -1,0 +1,34 @@
+PARROT CLICKER
+==============
+
+Same hosting shape as Momon and Take-Home: the app container does not
+grab ports 80 or 443. It listens on 127.0.0.1:3060 and piggybacks the
+Caddy you already run (Requestick's container, a host Caddy service,
+or anything else named like Caddy).
+
+  3010  Take-Home
+  3060  Parrot Clicker   <-- this one
+  3080  Momon
+  3090  Eye tracker
+
+Point DNS (A record) for the hostname at this machine first.
+
+Install on the VPS, from this repo:
+
+  sudo ./deploy/vps/install.sh parrots.yourmomon.top
+
+Docker already installed:
+
+  ./deploy/vps/start.sh parrots.yourmomon.top
+
+What start.sh does:
+
+  - systemd / host Caddy  → add the site to that Caddyfile (127.0.0.1:3060)
+  - Caddy in Docker       → share its network, reverse_proxy parrot-app:3000
+  - none of the above     → start a Caddy container of our own (profile: edge)
+
+Repair the site block without rebuilding:
+
+  sudo ./deploy/vps/repair.sh parrots.yourmomon.top
+
+The flock is saved in the browser. backups/ only keeps parrot.env.

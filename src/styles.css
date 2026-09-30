@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --color-paper: #f3ead7;
+  --color-paper-deep: #e6d6b4;
+  --color-ink: #1c2418;
+  --color-ink-soft: #3d4a36;
+  --color-muted: #6e6454;
+  --color-line: #d4c3a2;
+  --color-scarlet: #d63a2f;
+  --color-sun: #e0a11a;
+  --color-leaf: #2f6b45;
+  --color-teal: #1d7a68;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  html,
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+}
+
+@keyframes flock-float {
+  to {
+    transform: translateY(-72px);
+    opacity: 0;
+  }
+}
+
+@keyframes feather-fall {
+  to {
+    transform: translate(var(--dx), 84px) rotate(var(--rot));
+    opacity: 0;
+  }
+}
+
+@keyframes perch-boop {
+  40% {
+    transform: scale(0.96);
+  }
+}
+
+@keyframes golden-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-8deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(8deg);
+  }
+}
+
+.floater {
+  animation: flock-float 700ms ease-out forwards;
+}
+
+.feather {
+  animation: feather-fall 700ms ease-out forwards;
+}
+
+.parrot-boop {
+  animation: perch-boop 140ms ease-out;
+}
+
+.golden-bob {
+  animation: golden-bob 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floater,
+  .feather,
+  .parrot-boop,
+  .golden-bob {
+    animation: none;
+  }
+}

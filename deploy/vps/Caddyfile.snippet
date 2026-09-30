@@ -1,0 +1,10 @@
+# Added automatically when an existing Caddy is found (host or container).
+# Host Caddy proxies 127.0.0.1:3060. Docker Caddy proxies parrot-app on its network.
+# Wrapped in begin/end markers so a re-run replaces this block instead of duplicating it.
+
+# begin-parrot
+parrots.yourmomon.top, www.parrots.yourmomon.top {
+	encode gzip
+	reverse_proxy parrot-app:3000
+}
+# end-parrot

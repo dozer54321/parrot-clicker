@@ -1,0 +1,17 @@
+node_modules
+.output
+.vercel
+.nitro
+.tanstack
+artifacts
+screenshots
+*.env
+parrot.env
+backups
+docker-compose.override.yml
+.grok/skills
+.grok/references
+.grok/status
+.grok/preview.log
+.grok/og-pending
+.DS_Store

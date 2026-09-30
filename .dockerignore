@@ -1,0 +1,14 @@
+.git
+node_modules
+.output
+artifacts
+screenshots
+*.env
+parrot.env
+backups
+.grok/skills
+.grok/references
+.vercel
+.nitro
+.tanstack
+docker-compose.override.yml

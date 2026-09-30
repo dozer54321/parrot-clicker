@@ -1,0 +1,69 @@
+name: parrot
+
+# Default: no Caddy of our own. The app is published on 127.0.0.1:3060
+# so Requestick / Momon / Take-Home keep ports 80 and 443.
+# No existing Caddy:  COMPOSE_PROFILES=edge docker compose --env-file parrot.env up -d
+#
+# Port 3060 is intentionally not 3010 (Take-Home), 3080 (Momon), or 3090 (eye tracker).
+
+services:
+  app:
+    image: ${PARROT_IMAGE:-parrot:local}
+    container_name: parrot-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PARROT_VERSION: ${PARROT_VERSION:-dev}
+    pull_policy: missing
+    restart: unless-stopped
+    init: true
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      NODE_ENV: production
+      PARROT_VERSION: ${PARROT_VERSION:-dev}
+    ports:
+      - "127.0.0.1:${PARROT_PORT:-3060}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+    networks:
+      parrot:
+        aliases:
+          - parrot-app
+
+  caddy:
+    profiles: ["edge"]
+    image: caddy:2-alpine
+    container_name: parrot-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PARROT_DOMAIN: ${PARROT_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - parrot
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  parrot:

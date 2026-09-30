@@ -1,0 +1,4 @@
+{$PARROT_DOMAIN}, www.{$PARROT_DOMAIN} {
+	encode gzip
+	reverse_proxy parrot-app:3000
+}
