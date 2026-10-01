@@ -45,7 +45,7 @@ Player saves stay in the browser. `backups/` only keeps `parrot.env`.
 
 ## If the browser says “Secure connection failed”
 
-`www.parrot.yourmomon.top` has no DNS record, and the name was never added to Requestick's Caddy (the one already on port 443). On the VPS:
+HTTPS is added the same way Momon does it: one site block on the Caddy already running, then a reload. `www` is included only when that name has DNS. On the VPS:
 
 ```bash
 curl -fsSL -o /tmp/fix-tls.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/fix-tls.sh

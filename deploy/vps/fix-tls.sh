@@ -1,154 +1,207 @@
 #!/bin/bash
-# Add parrot.yourmomon.top to Requestick's Caddy — the one already on port 443.
-# Does not start a second Caddy and does not include www (that name has no DNS).
+# Same hook as Momon: find the Caddy already running, join its network,
+# write one site block, reload that Caddy. Does not start another one.
 #   sudo bash fix-tls.sh
 set -euo pipefail
 
 DOMAIN="${1:-parrot.yourmomon.top}"
-
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Need sudo to edit Requestick's Caddy. Re-running with sudo..."
   exec sudo -E "$0" "$@"
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is not installed, so Requestick's Caddy container is not here."
-  exit 1
-fi
+parrot_docker_caddy_id() {
+  docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null \
+    | grep -i caddy \
+    | grep -vi parrot-caddy \
+    | awk '{print $1}' \
+    | head -1
+}
 
-# Whoever publishes 443 is Requestick's Caddy (mesh-caddy).
-CID="$(docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' | awk '/443->/ {print $1; exit}')"
-if [ -z "$CID" ]; then
-  CID="$(docker ps --format '{{.ID}} {{.Names}}' | awk 'BEGIN{IGNORECASE=1} /mesh-caddy/ {print $1; exit}')"
-fi
-if [ -z "$CID" ]; then
-  echo "No container is listening on port 443. Requestick's Caddy is not running."
-  docker ps --format '{{.Names}} {{.Ports}}' || true
-  exit 1
-fi
-CNAME="$(docker ps --format '{{.Names}}' --filter "id=${CID}" | head -1)"
-echo "Port 443 is ${CNAME}. Editing that Caddyfile."
+parrot_caddyfile_from_container() {
+  local id="$1"
+  local dest src
+  while read -r dest src; do
+    [ -n "$dest" ] || continue
+    case "$dest" in
+      /etc/caddy/Caddyfile)
+        if [ -f "$src" ]; then echo "$src"; return 0; fi
+        ;;
+      /etc/caddy)
+        if [ -f "$src/Caddyfile" ]; then echo "$src/Caddyfile"; return 0; fi
+        ;;
+    esac
+    case "$src" in
+      *Caddyfile)
+        if [ -f "$src" ]; then echo "$src"; return 0; fi
+        ;;
+    esac
+  done < <(docker inspect -f '{{range .Mounts}}{{.Destination}} {{.Source}}{{"\n"}}{{end}}' "$id" 2>/dev/null)
+  for f in /opt/requestick/Caddyfile /opt/caddy/Caddyfile /etc/caddy/Caddyfile; do
+    if [ -f "$f" ]; then echo "$f"; return 0; fi
+  done
+  return 1
+}
 
-FILE=""
-while read -r dest src; do
-  [ -n "$dest" ] || continue
-  case "$dest" in
-    /etc/caddy/Caddyfile)
-      [ -f "$src" ] && FILE="$src"
+parrot_caddy_net() {
+  local id="$1"
+  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$id" 2>/dev/null \
+    | awk 'NF && $0 != "bridge" && $0 != "host" && $0 != "none" {print; exit}'
+}
+
+parrot_detect_caddy() {
+  CADDY_KIND=none
+  CADDY_FILE=""
+  CADDY_ID=""
+  CADDY_NET=""
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
+    CADDY_KIND=host
+    for f in /etc/caddy/Caddyfile /usr/local/etc/caddy/Caddyfile; do
+      if [ -f "$f" ]; then CADDY_FILE="$f"; break; fi
+    done
+    [ -n "$CADDY_FILE" ] || CADDY_FILE=/etc/caddy/Caddyfile
+    echo "Found host Caddy (systemd) → $CADDY_FILE"
+    return 0
+  fi
+
+  if command -v caddy >/dev/null 2>&1 && pgrep -x caddy >/dev/null 2>&1; then
+    CADDY_KIND=host
+    for f in /etc/caddy/Caddyfile /usr/local/etc/caddy/Caddyfile; do
+      if [ -f "$f" ]; then CADDY_FILE="$f"; break; fi
+    done
+    [ -n "$CADDY_FILE" ] || CADDY_FILE=/etc/caddy/Caddyfile
+    echo "Found host Caddy (process) → $CADDY_FILE"
+    return 0
+  fi
+
+  CADDY_ID="$(parrot_docker_caddy_id || true)"
+  if [ -n "$CADDY_ID" ]; then
+    CADDY_KIND=docker
+    CADDY_NET="$(parrot_caddy_net "$CADDY_ID" || true)"
+    CADDY_FILE="$(parrot_caddyfile_from_container "$CADDY_ID" || true)"
+    echo "Found Caddy container ${CADDY_ID:0:12} net=${CADDY_NET:-?} file=${CADDY_FILE:-unset}"
+    return 0
+  fi
+
+  echo "No Caddy on the host or in Docker."
+  return 0
+}
+
+parrot_write_site() {
+  local caddyfile="$1"
+  local domain="$2"
+  local target="$3"
+  if [ -z "$caddyfile" ]; then
+    echo "No Caddyfile path — cannot add ${domain}."
+    return 1
+  fi
+  mkdir -p "$(dirname "$caddyfile")"
+  python3 - "$caddyfile" "$domain" "$target" <<'PY'
+import pathlib, re, socket, sys
+path = pathlib.Path(sys.argv[1])
+domain = sys.argv[2]
+target = sys.argv[3]
+www = f"www.{domain}"
+try:
+    socket.getaddrinfo(www, 443)
+    addr = f"{domain}, {www}"
+except OSError:
+    addr = domain
+block = (
+    f"{addr} {{\n"
+    f"  encode gzip\n"
+    f"  reverse_proxy {target}\n"
+    f"}}\n"
+)
+text = path.read_text() if path.exists() else ""
+text = re.sub(r"(?ms)^# begin-parrot\n.*?# end-parrot\n?", "", text)
+alts = "|".join(re.escape(n) for n in (domain, www, "parrots.yourmomon.top", "www.parrots.yourmomon.top"))
+pattern = re.compile(rf"(?m)^(?:{alts})(?:,[^\n]*)?\s*\{{[\s\S]*?^\}}\s*")
+text, _ = pattern.subn("", text)
+path.write_text(text.rstrip() + "\n\n" + block)
+print(f"Caddy: {addr} → {target}")
+PY
+}
+
+parrot_reload_caddy() {
+  case "${CADDY_KIND}" in
+    host)
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl reload caddy 2>/dev/null || systemctl restart caddy
+      else
+        caddy reload --config "$CADDY_FILE"
+      fi
       ;;
-    /etc/caddy)
-      [ -f "$src/Caddyfile" ] && FILE="$src/Caddyfile"
+    docker)
+      if [ -n "$CADDY_ID" ]; then
+        docker exec "$CADDY_ID" caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
+          || docker restart "$CADDY_ID"
+      fi
       ;;
   esac
-done < <(docker inspect -f '{{range .Mounts}}{{.Destination}} {{.Source}}{{"\n"}}{{end}}' "$CID")
-if [ -z "$FILE" ] && [ -f /opt/requestick/Caddyfile ]; then
-  FILE=/opt/requestick/Caddyfile
-fi
-if [ -z "$FILE" ]; then
-  echo "Could not find the Caddyfile mounted into ${CNAME}."
-  docker inspect -f '{{range .Mounts}}{{.Destination}} <- {{.Source}}{{"\n"}}{{end}}' "$CID"
-  exit 1
-fi
-echo "Requestick Caddyfile: ${FILE}"
+}
+
+parrot_join_caddy_net() {
+  local i
+  [ -n "${CADDY_NET:-}" ] || return 0
+  for i in $(seq 1 30); do
+    if docker inspect -f '{{.State.Running}}' parrot-app 2>/dev/null | grep -qx true; then
+      docker network connect "$CADDY_NET" parrot-app 2>/dev/null || true
+      return 0
+    fi
+    sleep 2
+  done
+}
+
+parrot_piggyback() {
+  local domain="$1"
+  local port="${PARROT_PORT:-3060}"
+  local target ip
+
+  if [ "$CADDY_KIND" = "host" ]; then
+    target="127.0.0.1:${port}"
+    parrot_write_site "$CADDY_FILE" "$domain" "$target"
+    parrot_reload_caddy
+    echo "Piggybacked host Caddy."
+    return 0
+  fi
+
+  if [ "$CADDY_KIND" = "docker" ]; then
+    parrot_join_caddy_net
+    target="parrot-app:3000"
+    if [ -n "$CADDY_NET" ]; then
+      ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${CADDY_NET}\").IPAddress}}" parrot-app 2>/dev/null || true)"
+      if [ -n "$ip" ]; then
+        target="${ip}:3000"
+      fi
+    fi
+    if [ -z "$CADDY_FILE" ]; then
+      echo "Caddy is a container but its Caddyfile is not on disk. Cannot piggyback."
+      return 1
+    fi
+    parrot_write_site "$CADDY_FILE" "$domain" "$target"
+    parrot_reload_caddy
+    echo "Piggybacked Caddy container → ${target}"
+    return 0
+  fi
+
+  return 1
+}
 
 if ! docker inspect parrot-app >/dev/null 2>&1; then
   if [ -f /opt/parrot-clicker/docker-compose.yml ] && [ -f /opt/parrot-clicker/parrot.env ]; then
-    echo "Starting parrot-app."
     docker compose -f /opt/parrot-clicker/docker-compose.yml --env-file /opt/parrot-clicker/parrot.env up -d
   else
-    echo "parrot-app is not running and /opt/parrot-clicker is missing."
+    echo "parrot-app is not running."
     exit 1
   fi
 fi
 
-NETS="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CID")"
-TARGET=""
-while read -r net; do
-  [ -n "$net" ] || continue
-  case "$net" in bridge|host|none) continue ;; esac
-  docker network connect --alias parrot-app "$net" parrot-app 2>/dev/null || true
-  ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" parrot-app 2>/dev/null || true)"
-  if [ -n "$ip" ]; then
-    TARGET="${ip}:3000"
-    echo "parrot-app is on Requestick's network ${net} at ${ip}."
-    break
-  fi
-done <<<"$NETS"
-
-if [ -z "$TARGET" ]; then
-  echo "Could not attach parrot-app to Requestick's network."
-  echo "$NETS"
+parrot_detect_caddy
+if [ "$CADDY_KIND" = "none" ]; then
+  echo "No existing Caddy. Momon piggybacks on the one already installed."
   exit 1
 fi
 
-python3 - "$FILE" "$DOMAIN" "$TARGET" <<'PY'
-import pathlib, sys
-path, domain, target = sys.argv[1:]
-file = pathlib.Path(path)
-text = file.read_text(errors="replace") if file.exists() else ""
-names = {domain, f"www.{domain}", "parrots.yourmomon.top", "www.parrots.yourmomon.top"}
-lines = text.splitlines(keepends=True)
-out = []
-i = 0
-while i < len(lines):
-    stripped = lines[i].strip()
-    if stripped == "# begin-parrot":
-        i += 1
-        while i < len(lines) and lines[i].strip() != "# end-parrot":
-            i += 1
-        if i < len(lines):
-            i += 1
-        continue
-    head = stripped.split("{", 1)[0]
-    hosts = [h.strip() for h in head.split(",") if h.strip()]
-    if "{" in stripped and any(h in names for h in hosts):
-        depth = stripped.count("{") - stripped.count("}")
-        i += 1
-        while i < len(lines) and depth > 0:
-            depth += lines[i].count("{") - lines[i].count("}")
-            i += 1
-        continue
-    out.append(lines[i])
-    i += 1
-block = (
-    "\n# begin-parrot\n"
-    f"{domain} {{\n"
-    "\tencode gzip\n"
-    f"\treverse_proxy {target}\n"
-    "}\n"
-    "# end-parrot\n"
-)
-file.write_text("".join(out).rstrip() + "\n" + block)
-print(f"Added {domain} → {target}")
-PY
-
-echo "Checking Requestick's Caddyfile..."
-if ! docker exec "$CID" caddy validate --config /etc/caddy/Caddyfile; then
-  echo "Requestick refused the Caddyfile. Nothing was reloaded, so the other sites stay up."
-  exit 1
-fi
-
-echo "Reloading ${CNAME}..."
-if ! docker exec "$CID" caddy reload --config /etc/caddy/Caddyfile; then
-  echo "Reload failed. Recent logs:"
-  docker logs --tail 40 "$CID" || true
-  exit 1
-fi
-
-echo "Waiting for a certificate..."
-ok=0
-for _ in $(seq 1 20); do
-  if curl -fsS -o /dev/null --max-time 8 "https://${DOMAIN}/"; then
-    ok=1
-    break
-  fi
-  sleep 3
-done
-if [ "$ok" -eq 1 ]; then
-  echo "HTTPS is up: https://${DOMAIN}/"
-  exit 0
-fi
-
-echo "Reloaded Requestick, but https://${DOMAIN}/ still has no certificate."
-docker logs --tail 60 "$CID" || true
-exit 1
+parrot_piggyback "$DOMAIN"
+echo "Open https://${DOMAIN}"

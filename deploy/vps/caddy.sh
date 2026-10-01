@@ -4,16 +4,11 @@
 # Same idea as Momon and Take-Home: never steal :80/:443 from Requestick.
 
 parrot_docker_caddy_id() {
-  # Requestick owns 443. Prefer that container over any other Caddy.
-  local id
-  id="$(docker ps --format '{{.ID}} {{.Ports}}' 2>/dev/null | awk '/443->/ {print $1; exit}')"
-  if [ -n "$id" ]; then
-    echo "$id"
-    return 0
-  fi
-  docker ps --format '{{.ID}} {{.Names}}' 2>/dev/null \
-    | grep -i mesh-caddy \
-    | awk '{print $1; exit}'
+  docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null \
+    | grep -i caddy \
+    | grep -vi parrot-caddy \
+    | awk '{print $1}' \
+    | head -1
 }
 
 parrot_caddyfile_from_container() {
@@ -106,32 +101,22 @@ import pathlib, re, socket, sys
 path = pathlib.Path(sys.argv[1])
 domain = sys.argv[2]
 target = sys.argv[3]
-
-def resolves(host):
-    try:
-        socket.getaddrinfo(host, 443)
-        return True
-    except OSError:
-        return False
-
-# www with no DNS makes Let's Encrypt refuse the whole certificate,
-# and the browser then reports "Secure connection failed".
-names = [domain]
 www = f"www.{domain}"
-if www != domain and resolves(www):
-    names.append(www)
-addr = ", ".join(names)
+try:
+    socket.getaddrinfo(www, 443)
+    addr = f"{domain}, {www}"
+except OSError:
+    # Momon includes www because www.yourmomon.top exists. This name does not.
+    addr = domain
 block = (
-    "# begin-parrot\n"
     f"{addr} {{\n"
-    "\tencode gzip\n"
-    f"\treverse_proxy {target}\n"
-    "}\n"
-    "# end-parrot\n"
+    f"  encode gzip\n"
+    f"  reverse_proxy {target}\n"
+    f"}}\n"
 )
 text = path.read_text() if path.exists() else ""
 text = re.sub(r"(?ms)^# begin-parrot\n.*?# end-parrot\n?", "", text)
-alts = "|".join(re.escape(n) for n in (domain, www))
+alts = "|".join(re.escape(n) for n in (domain, www, "parrots.yourmomon.top", "www.parrots.yourmomon.top"))
 pattern = re.compile(rf"(?m)^(?:{alts})(?:,[^\n]*)?\s*\{{[\s\S]*?^\}}\s*")
 text, _ = pattern.subn("", text)
 path.write_text(text.rstrip() + "\n\n" + block)
@@ -158,15 +143,16 @@ EOF
 parrot_reload_caddy() {
   case "${CADDY_KIND}" in
     host)
-      if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
-        systemctl reload caddy
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl reload caddy 2>/dev/null || systemctl restart caddy
       else
         caddy reload --config "$CADDY_FILE"
       fi
       ;;
     docker)
       if [ -n "$CADDY_ID" ]; then
-        docker exec "$CADDY_ID" caddy reload --config /etc/caddy/Caddyfile
+        docker exec "$CADDY_ID" caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
+          || docker restart "$CADDY_ID"
       fi
       ;;
   esac
@@ -177,7 +163,7 @@ parrot_join_caddy_net() {
   [ -n "${CADDY_NET:-}" ] || return 0
   for i in $(seq 1 30); do
     if docker inspect -f '{{.State.Running}}' parrot-app 2>/dev/null | grep -qx true; then
-      docker network connect --alias parrot-app "$CADDY_NET" parrot-app 2>/dev/null || true
+      docker network connect "$CADDY_NET" parrot-app 2>/dev/null || true
       return 0
     fi
     sleep 2
@@ -227,12 +213,12 @@ parrot_piggyback() {
       fi
     fi
     if [ -z "$CADDY_FILE" ]; then
-      echo "Requestick's Caddy container has no Caddyfile on disk. Cannot add ${domain}."
+      echo "Caddy is a container but its Caddyfile is not on disk. Cannot piggyback."
       return 1
     fi
     parrot_write_site "$CADDY_FILE" "$domain" "$target"
     parrot_reload_caddy
-    echo "Added ${domain} to Requestick's Caddy → ${target}"
+    echo "Piggybacked Caddy container → ${target}"
     return 0
   fi
 
