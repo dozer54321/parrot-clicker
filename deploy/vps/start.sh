@@ -92,6 +92,11 @@ compose_up() {
   local img
   img="$(grep '^PARROT_IMAGE=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)"
   if [ -z "$img" ]; then img="parrot:local"; fi
+  if [ "${PARROT_REBUILD:-}" = "1" ]; then
+    echo "Building Parrot Clicker."
+    docker compose "${profiles[@]}" --env-file "$ENV_FILE" up -d --build --force-recreate
+    return
+  fi
   if docker image inspect "$img" >/dev/null 2>&1 || docker image inspect parrot:local >/dev/null 2>&1; then
     docker compose "${profiles[@]}" --env-file "$ENV_FILE" up -d
   else
@@ -132,7 +137,7 @@ set +a
 if [ "$CADDY_KIND" = "none" ]; then
   echo "No existing Caddy — starting Parrot Clicker with its own Caddy container."
   compose_up edge
-  wait_app || true
+  wait_app
 else
   echo "Using existing Caddy (${CADDY_KIND}). Not binding :80 or :443."
   if ! compose_up; then
@@ -140,20 +145,33 @@ else
     rm -f "$ROOT/docker-compose.override.yml"
     compose_up
   fi
-  wait_app || true
-  parrot_piggyback "$DOMAIN" || {
-    echo "Could not piggyback. Check the Caddyfile and that ports 80/443 belong to the Caddy you already run."
-    exit 1
-  }
+  wait_app
+  parrot_piggyback "$DOMAIN"
+fi
+
+echo "Checking https://${DOMAIN} ..."
+live=0
+for _ in $(seq 1 20); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "https://${DOMAIN}/" || true)"
+  if [ "$code" = "200" ]; then
+    live=1
+    break
+  fi
+  echo "  https://${DOMAIN} → ${code:-no response}"
+  sleep 3
+done
+if [ "$live" != 1 ]; then
+  echo "https://${DOMAIN} is not serving the game."
+  docker logs --tail 40 parrot-app 2>/dev/null || true
+  exit 1
 fi
 
 echo
-echo "Open https://${DOMAIN}"
+echo "Live: https://${DOMAIN}"
 echo "App container: parrot-app    localhost port: ${PARROT_PORT:-3060}"
 echo
 echo "Logs:   docker compose --env-file parrot.env logs -f app"
 echo "Stop:   docker compose --env-file parrot.env down"
-echo "Repair: sudo ./deploy/vps/repair.sh ${DOMAIN}"
 if [ "$(id -u)" -eq 0 ]; then
   "$ROOT/deploy/vps/update.sh" --install-timer
 else

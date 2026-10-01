@@ -2,41 +2,24 @@ PARROT CLICKER
 ==============
 
 Hostname: parrot.yourmomon.top
-(not parrots)
 
-Same hosting shape as Momon and Take-Home: the app container does not
-grab ports 80 or 443. It listens on 127.0.0.1:3060 and piggybacks the
-Caddy you already run.
+Same hosting as Momon and Take-Home. The app does not grab ports 80 or 443.
+It listens on 127.0.0.1:3060 and is added to the Caddy you already run.
 
   3010  Take-Home
-  3060  Parrot Clicker   <-- this one
+  3060  Parrot Clicker
   3080  Momon
   3090  Eye tracker
 
 Point DNS (A record) for parrot.yourmomon.top at this machine first.
 
-Install — no git, no GitHub username:
+Install — no git, no GitHub username. Rebuilds the app and checks the site:
 
   sudo apt-get update && sudo apt-get install -y curl
   curl -fsSL -o /tmp/parrot-install.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/bootstrap.sh
   sudo bash /tmp/parrot-install.sh
 
-What start.sh does:
+It is done only when https://parrot.yourmomon.top returns the game.
+A certificate with no app behind it is a 502. This install does not leave it that way.
 
-  - systemd / host Caddy  → add the site to that Caddyfile (127.0.0.1:3060)
-  - Caddy in Docker       → share its network, reverse_proxy parrot-app:3000
-  - none of the above     → start a Caddy container of our own (profile: edge)
-
-Auto-update:
-
-  A push to main publishes a public image. parrot-update.timer loads it
-  about every 2 minutes. The VPS never logs into GitHub.
-
-  systemctl status parrot-update.timer
-  journalctl -u parrot-update.service -n 40 --no-pager
-
-Repair the site block without rebuilding:
-
-  sudo ./deploy/vps/repair.sh parrot.yourmomon.top
-
-The flock is saved in the browser. backups/ only keeps parrot.env.
+www is not included. www.parrot.yourmomon.top has no DNS record.

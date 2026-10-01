@@ -188,39 +188,60 @@ networks:
 EOF
 }
 
-# Host Caddy talks to 127.0.0.1:3060. Docker Caddy talks to parrot-app:3000.
-parrot_piggyback() {
-  local domain="$1"
+# Host Caddy talks to 127.0.0.1:3060. Docker Caddy talks to the app on the
+# shared network, but only after that address answers. A dead IP is a 502.
+parrot_pick_upstream() {
   local port="${PARROT_PORT:-3060}"
-  local target
+  local ip
 
   if [ "$CADDY_KIND" = "host" ]; then
-    target="127.0.0.1:${port}"
-    parrot_write_site "$CADDY_FILE" "$domain" "$target"
-    parrot_reload_caddy
-    echo "Piggybacked host Caddy."
+    if curl -sf --max-time 3 "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
+      printf '%s\n' "127.0.0.1:${port}"
+      return 0
+    fi
+    echo "Nothing is answering on 127.0.0.1:${port}." >&2
+    return 1
+  fi
+
+  parrot_join_caddy_net
+  sleep 1
+
+  if [ -n "${CADDY_ID:-}" ] && docker exec "$CADDY_ID" wget -q -O /dev/null --timeout=4 "http://parrot-app:3000/" 2>/dev/null; then
+    printf '%s\n' "parrot-app:3000"
     return 0
   fi
 
-  if [ "$CADDY_KIND" = "docker" ]; then
-    parrot_join_caddy_net
-    target="parrot-app:3000"
-    if [ -n "$CADDY_NET" ]; then
-      local ip
-      ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${CADDY_NET}\").IPAddress}}" parrot-app 2>/dev/null || true)"
-      if [ -n "$ip" ]; then
-        target="${ip}:3000"
-      fi
+  ip=""
+  if [ -n "${CADDY_NET:-}" ]; then
+    ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${CADDY_NET}\").IPAddress}}" parrot-app 2>/dev/null || true)"
+  fi
+  if [ -n "$ip" ]; then
+    if [ -n "${CADDY_ID:-}" ] && docker exec "$CADDY_ID" wget -q -O /dev/null --timeout=4 "http://${ip}:3000/" 2>/dev/null; then
+      printf '%s\n' "${ip}:3000"
+      return 0
     fi
-    if [ -z "$CADDY_FILE" ]; then
-      echo "Caddy is a container but its Caddyfile is not on disk. Cannot piggyback."
-      return 1
+    if python3 -c "import socket; socket.create_connection(('${ip}', 3000), 3).close()" 2>/dev/null; then
+      printf '%s\n' "${ip}:3000"
+      return 0
     fi
-    parrot_write_site "$CADDY_FILE" "$domain" "$target"
-    parrot_reload_caddy
-    echo "Piggybacked Caddy container → ${target}"
-    return 0
   fi
 
+  echo "Caddy cannot reach parrot-app." >&2
+  docker ps -a --filter name=parrot-app --format '{{.Names}} {{.Status}}' >&2 || true
+  docker logs --tail 60 parrot-app >&2 || true
   return 1
+}
+
+parrot_piggyback() {
+  local domain="$1"
+  local target
+
+  target="$(parrot_pick_upstream)" || return 1
+  if [ -z "$CADDY_FILE" ]; then
+    echo "Caddy is running but its Caddyfile is not on disk. Cannot piggyback."
+    return 1
+  fi
+  parrot_write_site "$CADDY_FILE" "$domain" "$target"
+  parrot_reload_caddy
+  echo "Piggybacked ${CADDY_KIND} Caddy → ${target}"
 }
