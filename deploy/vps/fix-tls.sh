@@ -1,143 +1,188 @@
 #!/bin/bash
-# Drop www from the Parrot site block when that name has no DNS, then reload Caddy.
-# A certificate that includes a name with no DNS never issues, and HTTPS dies
-# with "Secure connection failed" even though port 80 redirects.
-#   sudo bash deploy/vps/fix-tls.sh
+# Make Caddy serve a real certificate for parrot.yourmomon.top.
+# The broken handshake is "no certificate for this exact name": the live
+# block was missing, still said "parrots", or still included www (no DNS).
+#   sudo bash fix-tls.sh
 set -euo pipefail
 
 DOMAIN="${1:-parrot.yourmomon.top}"
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Need sudo to edit the Caddyfile. Re-running with sudo..."
+  echo "Need sudo to edit Caddy. Re-running with sudo..."
   exec sudo -E "$0" "$@"
 fi
 
-python3 - "$DOMAIN" <<'PY'
-import os, pathlib, re, socket, subprocess, sys
-domain = sys.argv[1]
-www = f"www.{domain}"
-
-def resolves(host):
-    try:
-        socket.getaddrinfo(host, 443)
-        return True
-    except OSError:
-        return False
-
-keep_www = resolves(www)
-addr = domain if not keep_www else f"{domain}, {www}"
-print(f"Certificate names: {addr}")
-
-def rewrite(path: pathlib.Path) -> bool:
-    if not path.is_file():
-        return False
-    text = path.read_text(errors="replace")
-    if "begin-parrot" not in text and domain not in text and "parrots.yourmomon.top" not in text:
-        return False
-    pat = re.compile(r"(?ms)^# begin-parrot\n.*?# end-parrot\n?")
-    m = pat.search(text)
-    if not m:
-        print(f"No parrot block in {path}")
-        return False
-    block = m.group(0)
-    lines = block.splitlines()
-    replaced = False
-    for i, line in enumerate(lines):
-        if line.startswith("#") or "{" not in line:
-            continue
-        lines[i] = f"{addr} {{"
-        replaced = True
-        break
-    if not replaced:
-        print(f"Could not find the site line in {path}")
-        return False
-    new = "\n".join(lines)
-    if not new.endswith("\n"):
-        new += "\n"
-    if new == block:
-        print(f"Already fine: {path}")
-        return True
-    path.write_text(text[: m.start()] + new + text[m.end() :])
-    print(f"Updated {path}")
-    return True
-
-files = []
-for candidate in (
-    "/etc/caddy/Caddyfile",
-    "/usr/local/etc/caddy/Caddyfile",
-    "/opt/requestick/Caddyfile",
-    "/opt/caddy/Caddyfile",
-    "/opt/parrot-clicker/Caddyfile",
-):
-    files.append(pathlib.Path(candidate))
-
-def docker_ids():
-    try:
-        out = subprocess.check_output(
-            ["docker", "ps", "--format", "{{.ID}} {{.Image}} {{.Names}}"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return []
-    ids = []
-    for line in out.splitlines():
-        if re.search(r"caddy", line, re.I) and "parrot-caddy" not in line.lower():
-            ids.append(line.split()[0])
-    return ids
-
-for cid in docker_ids():
-    try:
-        mounts = subprocess.check_output(
-            ["docker", "inspect", "-f", "{{range .Mounts}}{{.Destination}} {{.Source}}\n{{end}}", cid],
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
+rewrite() {
+  local file="$1"
+  local target="$2"
+  python3 - "$file" "$DOMAIN" "$target" <<'PY'
+import pathlib, sys
+path, domain, target = sys.argv[1:]
+file = pathlib.Path(path)
+text = file.read_text(errors="replace") if file.exists() else ""
+names = {
+    domain,
+    f"www.{domain}",
+    "parrots.yourmomon.top",
+    "www.parrots.yourmomon.top",
+}
+lines = text.splitlines(keepends=True)
+out = []
+i = 0
+while i < len(lines):
+    stripped = lines[i].strip()
+    if stripped == "# begin-parrot":
+        i += 1
+        while i < len(lines) and lines[i].strip() != "# end-parrot":
+            i += 1
+        if i < len(lines):
+            i += 1
         continue
-    for line in mounts.splitlines():
-        parts = line.split()
-        if len(parts) != 2:
-            continue
-        dest, src = parts
-        if dest == "/etc/caddy/Caddyfile":
-            files.append(pathlib.Path(src))
-        elif dest == "/etc/caddy":
-            files.append(pathlib.Path(src) / "Caddyfile")
-
-changed = False
-seen = set()
-for path in files:
-    key = str(path)
-    if key in seen:
+    head = stripped.split("{", 1)[0]
+    hosts = [h.strip() for h in head.split(",") if h.strip()]
+    if "{" in stripped and any(h in names for h in hosts):
+        depth = stripped.count("{") - stripped.count("}")
+        i += 1
+        while i < len(lines) and depth > 0:
+            depth += lines[i].count("{") - lines[i].count("}")
+            i += 1
         continue
-    seen.add(key)
-    if rewrite(path):
-        changed = True
-
-if not changed:
-    print("No Parrot block found. Looked in /etc/caddy and Caddy container mounts.")
-    sys.exit(1)
-
-reloaded = False
-if os.path.exists("/run/systemd/system") or True:
-    r = subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, text=True)
-    if r.returncode == 0:
-        print("Reloaded host Caddy.")
-        reloaded = True
-for cid in docker_ids():
-    r = subprocess.run(
-        ["docker", "exec", cid, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
-        capture_output=True,
-        text=True,
-    )
-    if r.returncode == 0:
-        print(f"Reloaded Caddy container {cid[:12]}.")
-        reloaded = True
-    else:
-        print(f"Reload failed in {cid[:12]}: {(r.stderr or r.stdout).strip()}")
-
-if not reloaded:
-    print("Edited the file but could not reload Caddy. Reload it, then open the site again.")
-    sys.exit(1)
-print("Caddy reloaded. HTTPS can take half a minute while the certificate is issued.")
+    out.append(lines[i])
+    i += 1
+block = (
+    "\n# begin-parrot\n"
+    f"{domain} {{\n"
+    "\tencode gzip\n"
+    f"\treverse_proxy {target}\n"
+    "}\n"
+    "# end-parrot\n"
+)
+file.parent.mkdir(parents=True, exist_ok=True)
+file.write_text("".join(out).rstrip() + "\n" + block)
+print(f"Wrote {domain} → {target} in {file}")
 PY
+}
+
+caddy_ids() {
+  docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null \
+    | grep -i caddy \
+    | grep -vi parrot-caddy \
+    | awk '{print $1}' \
+    || true
+}
+
+# Put the app on Caddy's network so the name parrot-app resolves at reload.
+if docker inspect parrot-app >/dev/null 2>&1; then
+  for cid in $(caddy_ids); do
+    docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$cid" 2>/dev/null \
+      | while read -r net; do
+          [ -n "$net" ] || continue
+          case "$net" in bridge|host|none) continue ;; esac
+          docker network connect --alias parrot-app "$net" parrot-app 2>/dev/null || true
+          echo "Joined parrot-app to ${net}."
+        done
+  done
+fi
+
+declare -a FILES=()
+declare -a TARGETS=()
+
+add_job() {
+  local file="$1"
+  local target="$2"
+  [ -n "$file" ] || return 0
+  local i
+  for i in "${!FILES[@]}"; do
+    if [ "${FILES[$i]}" = "$file" ]; then
+      return 0
+    fi
+  done
+  FILES+=("$file")
+  TARGETS+=("$target")
+}
+
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
+  host_file=""
+  for f in /etc/caddy/Caddyfile /usr/local/etc/caddy/Caddyfile; do
+    if [ -f "$f" ]; then
+      host_file="$f"
+      break
+    fi
+  done
+  [ -n "$host_file" ] || host_file=/etc/caddy/Caddyfile
+  add_job "$host_file" "127.0.0.1:${PARROT_PORT:-3060}"
+fi
+
+for cid in $(caddy_ids); do
+  while read -r dest src; do
+    [ -n "$dest" ] || continue
+    case "$dest" in
+      /etc/caddy/Caddyfile)
+        [ -f "$src" ] && add_job "$src" "parrot-app:3000"
+        ;;
+      /etc/caddy)
+        [ -f "$src/Caddyfile" ] && add_job "$src/Caddyfile" "parrot-app:3000"
+        ;;
+    esac
+  done < <(docker inspect -f '{{range .Mounts}}{{.Destination}} {{.Source}}{{"\n"}}{{end}}' "$cid" 2>/dev/null)
+done
+
+if [ "${#FILES[@]}" -eq 0 ]; then
+  echo "Could not find the Caddyfile Caddy is actually using."
+  echo "Host service:"
+  systemctl status caddy --no-pager 2>/dev/null | head -20 || true
+  echo "Containers:"
+  docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null || true
+  exit 1
+fi
+
+for i in "${!FILES[@]}"; do
+  rewrite "${FILES[$i]}" "${TARGETS[$i]}"
+done
+
+reloaded=0
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
+  echo "Reloading host Caddy..."
+  systemctl reload caddy
+  reloaded=1
+fi
+for cid in $(caddy_ids); do
+  echo "Reloading Caddy container ${cid:0:12}..."
+  if docker exec "$cid" caddy reload --config /etc/caddy/Caddyfile; then
+    reloaded=1
+  else
+    echo "Reload failed. Caddy kept the previous config, so the certificate was not requested."
+    docker logs --tail 40 "$cid" 2>&1 || true
+    exit 1
+  fi
+done
+
+if [ "$reloaded" -ne 1 ]; then
+  echo "Nothing reloaded."
+  exit 1
+fi
+
+echo "Waiting for a certificate for https://${DOMAIN}/ ..."
+ok=0
+for _ in $(seq 1 20); do
+  if curl -fsS -o /dev/null --max-time 8 "https://${DOMAIN}/"; then
+    ok=1
+    break
+  fi
+  sleep 3
+done
+
+if [ "$ok" -eq 1 ]; then
+  echo "HTTPS is up: https://${DOMAIN}/"
+  exit 0
+fi
+
+echo "Caddy reloaded, but https://${DOMAIN}/ still has no working certificate."
+echo "Recent Caddy log:"
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
+  journalctl -u caddy -n 50 --no-pager || true
+fi
+for cid in $(caddy_ids); do
+  docker logs --tail 50 "$cid" 2>&1 || true
+done
+exit 1

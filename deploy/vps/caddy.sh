@@ -153,16 +153,15 @@ EOF
 parrot_reload_caddy() {
   case "${CADDY_KIND}" in
     host)
-      if command -v systemctl >/dev/null 2>&1; then
-        systemctl reload caddy 2>/dev/null || systemctl restart caddy
+      if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
+        systemctl reload caddy
       else
         caddy reload --config "$CADDY_FILE"
       fi
       ;;
     docker)
       if [ -n "$CADDY_ID" ]; then
-        docker exec "$CADDY_ID" caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
-          || docker restart "$CADDY_ID"
+        docker exec "$CADDY_ID" caddy reload --config /etc/caddy/Caddyfile
       fi
       ;;
   esac
