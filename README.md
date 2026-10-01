@@ -14,7 +14,13 @@ curl -fsSL -o /tmp/parrot-install.sh https://raw.githubusercontent.com/dozer5432
 sudo bash /tmp/parrot-install.sh
 ```
 
-That rebuilds the app, attaches it to the Caddy you already run, and does not finish until `https://parrot.yourmomon.top` returns the game. A 502 means Caddy cannot reach the app. This install checks that before it exits.
+A blank page is Caddy’s empty 502: the certificate is fine, the app is not reachable. On the VPS:
+
+```bash
+curl -fsSL -o /tmp/fix-upstream.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/fix-upstream.sh
+sudo bash /tmp/fix-upstream.sh
+```
+
 
 | Port | App |
 | --- | --- |
