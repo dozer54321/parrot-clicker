@@ -1,20 +1,19 @@
 #!/bin/bash
-# Install Parrot Clicker on the VPS. No git. No GitHub username.
-# Save this file, then:
+# Parrot Clicker. One command. No questions. No git. No compile if the image is published.
 #   sudo bash /tmp/parrot-install.sh
-# Hostname is parrot.yourmomon.top unless you pass another one.
 set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
 unset GIT_ASKPASS SSH_ASKPASS || true
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Need sudo so Docker can be installed. Re-running with sudo..."
+  echo "Need sudo. Re-running with sudo..."
   exec sudo -E "$0" "$@"
 fi
 
 DOMAIN="${1:-parrot.yourmomon.top}"
 ROOT=/opt/parrot-clicker
 SRC_URL="https://codeload.github.com/dozer54321/parrot-clicker/tar.gz/refs/heads/main"
+IMG_URL="https://github.com/dozer54321/parrot-clicker/releases/download/rolling/parrot-image.tar.gz"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -26,7 +25,7 @@ keep="$(mktemp -d)"
 cleanup() { rm -rf "$tmp" "$stage" "$keep"; }
 trap cleanup EXIT
 
-echo "Downloading Parrot Clicker. This does not ask for a GitHub login."
+echo "Downloading Parrot Clicker."
 curl -fsSL --retry 3 --retry-delay 2 -A "ParrotClicker-install/1.0" -o "$tmp" "$SRC_URL"
 tar -xzf "$tmp" -C "$stage"
 src="$(find "$stage" -mindepth 1 -maxdepth 1 -type d | head -n1)"
@@ -47,6 +46,15 @@ for f in parrot.env docker-compose.override.yml .autoupdate-rev; do
     cp -a "$keep/$f" "$ROOT/$f"
   fi
 done
+
+echo "Downloading the prebuilt app (no compile)."
+if curl -fL --retry 3 --retry-delay 2 -A "ParrotClicker-install/1.0" -o "$ROOT/parrot-image.tar.gz" "$IMG_URL"; then
+  echo "Got the prebuilt image."
+else
+  rm -f "$ROOT/parrot-image.tar.gz"
+  echo "No prebuilt image yet. This machine will build it. The yellow text is normal."
+  export PARROT_REBUILD=1
+fi
 
 chmod +x "$ROOT/deploy/vps/"*.sh
 "$ROOT/deploy/vps/install.sh" "$DOMAIN"

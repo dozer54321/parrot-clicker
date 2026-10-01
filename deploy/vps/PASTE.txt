@@ -1,8 +1,4 @@
-PARROT CLICKER
-==============
-
-Paste one line at a time. It installs parrot.yourmomon.top.
-No git. No username. No compile.
+Paste one line at a time.
 
 sudo apt-get update && sudo apt-get install -y curl
 curl -fsSL -o /tmp/parrot-install.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/bootstrap.sh

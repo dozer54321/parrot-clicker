@@ -41,5 +41,4 @@ fi
 
 chmod +x "$ROOT/deploy/vps/"*.sh 2>/dev/null || true
 
-export PARROT_REBUILD=1
 "$ROOT/deploy/vps/start.sh" "$DOMAIN"
