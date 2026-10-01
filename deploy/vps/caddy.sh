@@ -4,11 +4,16 @@
 # Same idea as Momon and Take-Home: never steal :80/:443 from Requestick.
 
 parrot_docker_caddy_id() {
-  docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null \
-    | grep -i caddy \
-    | grep -vi parrot-caddy \
-    | awk '{print $1}' \
-    | head -1
+  # Requestick owns 443. Prefer that container over any other Caddy.
+  local id
+  id="$(docker ps --format '{{.ID}} {{.Ports}}' 2>/dev/null | awk '/443->/ {print $1; exit}')"
+  if [ -n "$id" ]; then
+    echo "$id"
+    return 0
+  fi
+  docker ps --format '{{.ID}} {{.Names}}' 2>/dev/null \
+    | grep -i mesh-caddy \
+    | awk '{print $1; exit}'
 }
 
 parrot_caddyfile_from_container() {
@@ -214,13 +219,20 @@ parrot_piggyback() {
   if [ "$CADDY_KIND" = "docker" ]; then
     parrot_join_caddy_net
     target="parrot-app:3000"
+    if [ -n "$CADDY_NET" ]; then
+      local ip
+      ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${CADDY_NET}\").IPAddress}}" parrot-app 2>/dev/null || true)"
+      if [ -n "$ip" ]; then
+        target="${ip}:3000"
+      fi
+    fi
     if [ -z "$CADDY_FILE" ]; then
-      echo "Caddy is a container but its Caddyfile is not on disk. Cannot piggyback."
+      echo "Requestick's Caddy container has no Caddyfile on disk. Cannot add ${domain}."
       return 1
     fi
     parrot_write_site "$CADDY_FILE" "$domain" "$target"
     parrot_reload_caddy
-    echo "Piggybacked Caddy container → ${target}"
+    echo "Added ${domain} to Requestick's Caddy → ${target}"
     return 0
   fi
 

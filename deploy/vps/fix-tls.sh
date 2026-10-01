@@ -1,31 +1,92 @@
 #!/bin/bash
-# Make Caddy serve a real certificate for parrot.yourmomon.top.
-# The broken handshake is "no certificate for this exact name": the live
-# block was missing, still said "parrots", or still included www (no DNS).
+# Add parrot.yourmomon.top to Requestick's Caddy — the one already on port 443.
+# Does not start a second Caddy and does not include www (that name has no DNS).
 #   sudo bash fix-tls.sh
 set -euo pipefail
 
 DOMAIN="${1:-parrot.yourmomon.top}"
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Need sudo to edit Caddy. Re-running with sudo..."
+  echo "Need sudo to edit Requestick's Caddy. Re-running with sudo..."
   exec sudo -E "$0" "$@"
 fi
 
-rewrite() {
-  local file="$1"
-  local target="$2"
-  python3 - "$file" "$DOMAIN" "$target" <<'PY'
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed, so Requestick's Caddy container is not here."
+  exit 1
+fi
+
+# Whoever publishes 443 is Requestick's Caddy (mesh-caddy).
+CID="$(docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' | awk '/443->/ {print $1; exit}')"
+if [ -z "$CID" ]; then
+  CID="$(docker ps --format '{{.ID}} {{.Names}}' | awk 'BEGIN{IGNORECASE=1} /mesh-caddy/ {print $1; exit}')"
+fi
+if [ -z "$CID" ]; then
+  echo "No container is listening on port 443. Requestick's Caddy is not running."
+  docker ps --format '{{.Names}} {{.Ports}}' || true
+  exit 1
+fi
+CNAME="$(docker ps --format '{{.Names}}' --filter "id=${CID}" | head -1)"
+echo "Port 443 is ${CNAME}. Editing that Caddyfile."
+
+FILE=""
+while read -r dest src; do
+  [ -n "$dest" ] || continue
+  case "$dest" in
+    /etc/caddy/Caddyfile)
+      [ -f "$src" ] && FILE="$src"
+      ;;
+    /etc/caddy)
+      [ -f "$src/Caddyfile" ] && FILE="$src/Caddyfile"
+      ;;
+  esac
+done < <(docker inspect -f '{{range .Mounts}}{{.Destination}} {{.Source}}{{"\n"}}{{end}}' "$CID")
+if [ -z "$FILE" ] && [ -f /opt/requestick/Caddyfile ]; then
+  FILE=/opt/requestick/Caddyfile
+fi
+if [ -z "$FILE" ]; then
+  echo "Could not find the Caddyfile mounted into ${CNAME}."
+  docker inspect -f '{{range .Mounts}}{{.Destination}} <- {{.Source}}{{"\n"}}{{end}}' "$CID"
+  exit 1
+fi
+echo "Requestick Caddyfile: ${FILE}"
+
+if ! docker inspect parrot-app >/dev/null 2>&1; then
+  if [ -f /opt/parrot-clicker/docker-compose.yml ] && [ -f /opt/parrot-clicker/parrot.env ]; then
+    echo "Starting parrot-app."
+    docker compose -f /opt/parrot-clicker/docker-compose.yml --env-file /opt/parrot-clicker/parrot.env up -d
+  else
+    echo "parrot-app is not running and /opt/parrot-clicker is missing."
+    exit 1
+  fi
+fi
+
+NETS="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CID")"
+TARGET=""
+while read -r net; do
+  [ -n "$net" ] || continue
+  case "$net" in bridge|host|none) continue ;; esac
+  docker network connect --alias parrot-app "$net" parrot-app 2>/dev/null || true
+  ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" parrot-app 2>/dev/null || true)"
+  if [ -n "$ip" ]; then
+    TARGET="${ip}:3000"
+    echo "parrot-app is on Requestick's network ${net} at ${ip}."
+    break
+  fi
+done <<<"$NETS"
+
+if [ -z "$TARGET" ]; then
+  echo "Could not attach parrot-app to Requestick's network."
+  echo "$NETS"
+  exit 1
+fi
+
+python3 - "$FILE" "$DOMAIN" "$TARGET" <<'PY'
 import pathlib, sys
 path, domain, target = sys.argv[1:]
 file = pathlib.Path(path)
 text = file.read_text(errors="replace") if file.exists() else ""
-names = {
-    domain,
-    f"www.{domain}",
-    "parrots.yourmomon.top",
-    "www.parrots.yourmomon.top",
-}
+names = {domain, f"www.{domain}", "parrots.yourmomon.top", "www.parrots.yourmomon.top"}
 lines = text.splitlines(keepends=True)
 out = []
 i = 0
@@ -57,112 +118,24 @@ block = (
     "}\n"
     "# end-parrot\n"
 )
-file.parent.mkdir(parents=True, exist_ok=True)
 file.write_text("".join(out).rstrip() + "\n" + block)
-print(f"Wrote {domain} → {target} in {file}")
+print(f"Added {domain} → {target}")
 PY
-}
 
-caddy_ids() {
-  docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null \
-    | grep -i caddy \
-    | grep -vi parrot-caddy \
-    | awk '{print $1}' \
-    || true
-}
-
-# Put the app on Caddy's network so the name parrot-app resolves at reload.
-if docker inspect parrot-app >/dev/null 2>&1; then
-  for cid in $(caddy_ids); do
-    docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$cid" 2>/dev/null \
-      | while read -r net; do
-          [ -n "$net" ] || continue
-          case "$net" in bridge|host|none) continue ;; esac
-          docker network connect --alias parrot-app "$net" parrot-app 2>/dev/null || true
-          echo "Joined parrot-app to ${net}."
-        done
-  done
-fi
-
-declare -a FILES=()
-declare -a TARGETS=()
-
-add_job() {
-  local file="$1"
-  local target="$2"
-  [ -n "$file" ] || return 0
-  local i
-  for i in "${!FILES[@]}"; do
-    if [ "${FILES[$i]}" = "$file" ]; then
-      return 0
-    fi
-  done
-  FILES+=("$file")
-  TARGETS+=("$target")
-}
-
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
-  host_file=""
-  for f in /etc/caddy/Caddyfile /usr/local/etc/caddy/Caddyfile; do
-    if [ -f "$f" ]; then
-      host_file="$f"
-      break
-    fi
-  done
-  [ -n "$host_file" ] || host_file=/etc/caddy/Caddyfile
-  add_job "$host_file" "127.0.0.1:${PARROT_PORT:-3060}"
-fi
-
-for cid in $(caddy_ids); do
-  while read -r dest src; do
-    [ -n "$dest" ] || continue
-    case "$dest" in
-      /etc/caddy/Caddyfile)
-        [ -f "$src" ] && add_job "$src" "parrot-app:3000"
-        ;;
-      /etc/caddy)
-        [ -f "$src/Caddyfile" ] && add_job "$src/Caddyfile" "parrot-app:3000"
-        ;;
-    esac
-  done < <(docker inspect -f '{{range .Mounts}}{{.Destination}} {{.Source}}{{"\n"}}{{end}}' "$cid" 2>/dev/null)
-done
-
-if [ "${#FILES[@]}" -eq 0 ]; then
-  echo "Could not find the Caddyfile Caddy is actually using."
-  echo "Host service:"
-  systemctl status caddy --no-pager 2>/dev/null | head -20 || true
-  echo "Containers:"
-  docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null || true
+echo "Checking Requestick's Caddyfile..."
+if ! docker exec "$CID" caddy validate --config /etc/caddy/Caddyfile; then
+  echo "Requestick refused the Caddyfile. Nothing was reloaded, so the other sites stay up."
   exit 1
 fi
 
-for i in "${!FILES[@]}"; do
-  rewrite "${FILES[$i]}" "${TARGETS[$i]}"
-done
-
-reloaded=0
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
-  echo "Reloading host Caddy..."
-  systemctl reload caddy
-  reloaded=1
-fi
-for cid in $(caddy_ids); do
-  echo "Reloading Caddy container ${cid:0:12}..."
-  if docker exec "$cid" caddy reload --config /etc/caddy/Caddyfile; then
-    reloaded=1
-  else
-    echo "Reload failed. Caddy kept the previous config, so the certificate was not requested."
-    docker logs --tail 40 "$cid" 2>&1 || true
-    exit 1
-  fi
-done
-
-if [ "$reloaded" -ne 1 ]; then
-  echo "Nothing reloaded."
+echo "Reloading ${CNAME}..."
+if ! docker exec "$CID" caddy reload --config /etc/caddy/Caddyfile; then
+  echo "Reload failed. Recent logs:"
+  docker logs --tail 40 "$CID" || true
   exit 1
 fi
 
-echo "Waiting for a certificate for https://${DOMAIN}/ ..."
+echo "Waiting for a certificate..."
 ok=0
 for _ in $(seq 1 20); do
   if curl -fsS -o /dev/null --max-time 8 "https://${DOMAIN}/"; then
@@ -171,18 +144,11 @@ for _ in $(seq 1 20); do
   fi
   sleep 3
 done
-
 if [ "$ok" -eq 1 ]; then
   echo "HTTPS is up: https://${DOMAIN}/"
   exit 0
 fi
 
-echo "Caddy reloaded, but https://${DOMAIN}/ still has no working certificate."
-echo "Recent Caddy log:"
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy 2>/dev/null; then
-  journalctl -u caddy -n 50 --no-pager || true
-fi
-for cid in $(caddy_ids); do
-  docker logs --tail 50 "$cid" 2>&1 || true
-done
+echo "Reloaded Requestick, but https://${DOMAIN}/ still has no certificate."
+docker logs --tail 60 "$CID" || true
 exit 1

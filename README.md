@@ -45,7 +45,7 @@ Player saves stay in the browser. `backups/` only keeps `parrot.env`.
 
 ## If the browser says “Secure connection failed”
 
-`www.parrot.yourmomon.top` has no DNS record. A certificate that includes it never issues, and HTTPS dies even though the name itself is fine. On the VPS:
+`www.parrot.yourmomon.top` has no DNS record, and the name was never added to Requestick's Caddy (the one already on port 443). On the VPS:
 
 ```bash
 curl -fsSL -o /tmp/fix-tls.sh https://raw.githubusercontent.com/dozer54321/parrot-clicker/main/deploy/vps/fix-tls.sh
