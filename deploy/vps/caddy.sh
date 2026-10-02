@@ -163,7 +163,9 @@ parrot_join_caddy_net() {
   [ -n "${CADDY_NET:-}" ] || return 0
   for i in $(seq 1 30); do
     if docker inspect -f '{{.State.Running}}' parrot-app 2>/dev/null | grep -qx true; then
-      docker network connect "$CADDY_NET" parrot-app 2>/dev/null || true
+      # Never leave the alias "app". Requestick and Take-Home proxy to app:3000.
+      docker network disconnect "$CADDY_NET" parrot-app 2>/dev/null || true
+      docker network connect --alias parrot-app "$CADDY_NET" parrot-app 2>/dev/null || true
       return 0
     fi
     sleep 2
@@ -176,11 +178,13 @@ parrot_write_net_override() {
   cat > "$root/docker-compose.override.yml" <<EOF
 # Generated: attach parrot-app to the existing Caddy network.
 services:
-  app:
+  parrot:
     container_name: parrot-app
     networks:
-      - parrot
-      - caddy_net
+      parrot: {}
+      caddy_net:
+        aliases:
+          - parrot-app
 networks:
   caddy_net:
     external: true

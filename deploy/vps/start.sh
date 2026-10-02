@@ -170,7 +170,7 @@ echo
 echo "Live: https://${DOMAIN}"
 echo "App container: parrot-app    localhost port: ${PARROT_PORT:-3060}"
 echo
-echo "Logs:   docker compose --env-file parrot.env logs -f app"
+echo "Logs:   docker compose --env-file parrot.env logs -f parrot"
 echo "Stop:   docker compose --env-file parrot.env down"
 if [ "$(id -u)" -eq 0 ]; then
   "$ROOT/deploy/vps/update.sh" --install-timer

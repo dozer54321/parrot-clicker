@@ -7,7 +7,7 @@ name: parrot
 # Port 3060 is intentionally not 3010 (Take-Home), 3080 (Momon), or 3090 (eye tracker).
 
 services:
-  app:
+  parrot:
     image: ${PARROT_IMAGE:-parrot:local}
     container_name: parrot-app
     build:
@@ -48,7 +48,7 @@ services:
     container_name: parrot-caddy
     restart: unless-stopped
     depends_on:
-      - app
+      - parrot
     ports:
       - "80:80"
       - "443:443"

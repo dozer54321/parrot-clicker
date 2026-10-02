@@ -113,6 +113,6 @@ profiles=()
 if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'parrot-caddy'; then
   profiles=(--profile edge)
 fi
-docker compose "${profiles[@]}" --env-file "$ROOT/parrot.env" up -d --no-build --force-recreate app
+docker compose "${profiles[@]}" --env-file "$ROOT/parrot.env" up -d --no-build --force-recreate parrot
 printf '%s\n' "$new" > "$STATE"
 echo "Updated to ${new:0:7}. Browser flocks are unchanged."

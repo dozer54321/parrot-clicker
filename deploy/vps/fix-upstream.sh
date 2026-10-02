@@ -83,7 +83,9 @@ TARGET=""
 while read -r net; do
   [ -n "$net" ] || continue
   case "$net" in bridge|host|none) continue ;; esac
-  docker network connect "$net" parrot-app 2>/dev/null || true
+  # Drop any "app" alias first. Other sites proxy to app:3000.
+  docker network disconnect "$net" parrot-app 2>/dev/null || true
+  docker network connect --alias parrot-app "$net" parrot-app 2>/dev/null || true
   sleep 1
   if docker exec "$CID" wget -q -O /dev/null --timeout=4 "http://parrot-app:3000/" 2>/dev/null; then
     TARGET="parrot-app:3000"
