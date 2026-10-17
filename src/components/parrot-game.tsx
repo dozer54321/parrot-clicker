@@ -20,19 +20,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BUILDINGS,
   NEWS,
+  PRESTIGE,
   UPGRADES,
   type BuildingId,
   buildingShare,
   bulkCost,
   clickValue,
+  feathersFromEarned,
+  nestEgg,
+  nextFeatherAt,
+  PRESTIGE_SCALE,
   productionPerSec,
   requirementMet,
+  starterSeeds,
   totalBuildings,
   unitCost,
 } from "@/game/balance";
 import { gleam, squawk } from "@/game/audio";
 import { formatDuration, formatFlock } from "@/game/format";
-import { quoteFor, useGame, type BuyQty } from "@/game/store";
+import { quoteFor, runIsClean, useGame, type BuyQty } from "@/game/store";
 
 const ICONS: Record<BuildingId, LucideIcon> = {
   seed: Wheat,
@@ -77,11 +83,12 @@ export function ParrotGame() {
   const birdRef = useRef<HTMLButtonElement>(null);
   const [floaters, setFloaters] = useState<Floater[]>([]);
   const [feathers, setFeathers] = useState<Feather[]>([]);
-  const [tab, setTab] = useState<"roosts" | "tricks" | "ledger" | "cheats">("roosts");
+  const [tab, setTab] = useState<"roosts" | "tricks" | "ledger" | "molt" | "cheats">("roosts");
   const [toast, setToast] = useState<string | null>(null);
   const [newsIdx, setNewsIdx] = useState(0);
   const [grantText, setGrantText] = useState("1000000");
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmMolt, setConfirmMolt] = useState(false);
   const idRef = useRef(1);
 
   useEffect(() => {
@@ -138,10 +145,14 @@ export function ParrotGame() {
     cheatProd: game.cheatProd,
     cheatClick: game.cheatClick,
     buff: game.buff,
+    prestige: game.prestige,
   };
   const pps = productionPerSec(snap, now);
   const perTap = clickValue(snap, now);
   const buffLeft = game.buff && game.buff.until > now ? (game.buff.until - now) / 1000 : 0;
+  const clean = runIsClean(game);
+  const moltPay = clean ? feathersFromEarned(game.runEarned) : 0;
+  const moltNext = nextFeatherAt(game.runEarned);
 
   const goldenSpot = useMemo(() => {
     if (!game.golden) return null;
@@ -273,6 +284,13 @@ export function ParrotGame() {
               {formatFlock(pps)} per second
             </p>
             <p className="mt-1 text-sm text-ink-soft tabular-nums">{formatFlock(perTap)} per squawk</p>
+            <p className="mt-2 text-sm text-sun">
+              {clean
+                ? moltPay > 0
+                  ? `A clean molt pays ${moltPay.toLocaleString("en-US")} feather${moltPay === 1 ? "" : "s"}`
+                  : `${formatFlock(Math.max(0, moltNext - game.runEarned))} more gathered for the first feather`
+                : "Cheats void this molt"}
+            </p>
             {buffLeft > 0 && game.buff ? (
               <p className="mt-3 rounded-full bg-scarlet px-3 py-1 text-xs font-semibold text-paper">
                 {game.buff.label} · {Math.ceil(buffLeft)}s
@@ -355,6 +373,7 @@ export function ParrotGame() {
                 ["roosts", "Roosts"],
                 ["tricks", "Tricks"],
                 ["ledger", "Ledger"],
+                ["molt", "Molt"],
                 ["cheats", "Cheats"],
               ] as const
             ).map(([id, label]) => (
@@ -365,7 +384,7 @@ export function ParrotGame() {
                 aria-selected={tab === id}
                 onClick={() => setTab(id)}
                 className={
-                  "h-11 flex-1 rounded-full text-sm font-semibold " +
+                  "h-11 flex-1 rounded-full px-1 text-xs font-semibold sm:text-sm " +
                   (tab === id ? "bg-ink text-paper" : "text-ink-soft")
                 }
               >
@@ -492,6 +511,8 @@ export function ParrotGame() {
                 <Stat label="Roosts" value={totalBuildings(game.buildings).toLocaleString("en-US")} />
                 <Stat label="Golden caught" value={String(game.goldenClicks)} />
                 <Stat label="Contraband uses" value={String(game.cheatsUsed)} />
+                <Stat label="Feathers held" value={String(game.feathers)} />
+                <Stat label="Molts" value={String(game.molts)} />
                 <div className="col-span-2 rounded-2xl bg-paper-deep px-4 py-3">
                   <dt className="text-xs tracking-wide text-muted uppercase">Marks</dt>
                   <dd className="mt-1 text-sm text-ink-soft">
@@ -501,6 +522,7 @@ export function ParrotGame() {
                       game.lifetime >= 1_000_000 ? "Million-parrot flock" : null,
                       game.goldenClicks > 0 ? "Caught gold" : null,
                       game.cheatsUsed > 0 ? "Opened the drawer" : null,
+                      game.molts > 0 ? "Molted clean" : null,
                     ]
                       .filter(Boolean)
                       .join(" · ") || "Nothing inked yet. Tap the macaw."}
@@ -509,13 +531,120 @@ export function ParrotGame() {
               </dl>
             ) : null}
 
+            {tab === "molt" ? (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <h2 className="font-display text-lg font-semibold text-ink">Molt</h2>
+                  <p className="mt-1 text-sm text-ink-soft">
+                    A clean flock can be reset for feathers. Feathers stay, and you spend them so the next
+                    flock starts faster. Opening the contraband drawer voids the payout.
+                  </p>
+                </div>
+                <dl className="grid grid-cols-2 gap-2">
+                  <Stat label="Feathers held" value={game.feathers.toLocaleString("en-US")} />
+                  <Stat
+                    label="This molt pays"
+                    value={clean ? moltPay.toLocaleString("en-US") : "Void"}
+                  />
+                  <Stat label="Gathered this run" value={formatFlock(game.runEarned)} />
+                  <Stat label="Next feather at" value={formatFlock(moltNext)} />
+                </dl>
+                <p className="text-sm text-ink-soft">
+                  {clean
+                    ? moltPay > 0
+                      ? `This build gathered ${formatFlock(game.runEarned)} parrots. Molting banks ${moltPay.toLocaleString("en-US")} feather${moltPay === 1 ? "" : "s"} and clears the perch.`
+                      : `Keep the drawer shut. The first feather is ${formatFlock(PRESTIGE_SCALE)} parrots gathered, then each one costs more.`
+                    : "This flock used cheats. You can throw it away from the cheat drawer, but it pays no feathers."}
+                </p>
+                {confirmMolt ? (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const gained = game.molt();
+                        setConfirmMolt(false);
+                        setToast(
+                          gained > 0
+                            ? `Molted for ${gained.toLocaleString("en-US")} feather${gained === 1 ? "" : "s"}. The perch is empty.`
+                            : "Nothing to molt.",
+                        );
+                      }}
+                      className="h-11 flex-1 rounded-full bg-sun text-sm font-semibold text-ink"
+                    >
+                      Molt for {moltPay.toLocaleString("en-US")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmMolt(false)}
+                      className="h-11 flex-1 rounded-full border border-line text-sm font-semibold text-ink"
+                    >
+                      Keep them
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!clean || moltPay < 1}
+                    onClick={() => setConfirmMolt(true)}
+                    className={
+                      "h-11 rounded-full text-sm font-semibold " +
+                      (clean && moltPay > 0
+                        ? "bg-sun text-ink"
+                        : "bg-paper-deep text-muted")
+                    }
+                  >
+                    {clean ? "Molt this flock" : "Molt locked"}
+                  </button>
+                )}
+                <ul className="flex flex-col gap-2">
+                  {PRESTIGE.map((u) => {
+                    const level = game.prestige[u.id] ?? 0;
+                    const maxed = level >= u.max;
+                    const cost = maxed ? 0 : u.cost(level);
+                    const affordable = !maxed && game.feathers >= cost;
+                    return (
+                      <li key={u.id}>
+                        <button
+                          type="button"
+                          disabled={!affordable}
+                          onClick={() => game.buyPrestige(u.id)}
+                          className={
+                            "w-full rounded-2xl border px-4 py-3 text-left " +
+                            (affordable ? "border-sun/50 bg-sun/15" : "border-line bg-paper-deep/60")
+                          }
+                        >
+                          <span className="flex items-baseline justify-between gap-3">
+                            <span className="font-semibold text-ink">
+                              {u.name}
+                              <span className="ml-2 text-xs font-semibold text-muted">
+                                {level}/{u.max}
+                              </span>
+                            </span>
+                            <span className="text-sm font-semibold text-sun tabular-nums">
+                              {maxed ? "Max" : `${cost} feather${cost === 1 ? "" : "s"}`}
+                            </span>
+                          </span>
+                          <span className="mt-1 block text-sm text-ink-soft">{u.blurb}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="text-xs text-muted">
+                  Next molt starts with {starterSeeds(game.prestige.seeds ?? 0)} seed dish
+                  {starterSeeds(game.prestige.seeds ?? 0) === 1 ? "" : "es"} and{" "}
+                  {formatFlock(nestEgg(game.prestige.egg ?? 0))} parrots already banked.
+                </p>
+              </div>
+            ) : null}
+
             {tab === "cheats" ? (
               <div className="flex flex-col gap-4">
                 <div>
                   <h2 className="font-display text-lg font-semibold text-ink">Contraband drawer</h2>
                   <p className="mt-1 text-sm text-ink-soft">
-                    These change the flock for real. Grants count toward lifetime, so tricks can unlock.
-                    Press ` to open this drawer.
+                    Using any of these taints the flock. A tainted flock can be thrown away, but it cannot
+                    be molted for feathers. Press ` to open this drawer.
                   </p>
                 </div>
 
@@ -659,12 +788,12 @@ export function ParrotGame() {
                         onClick={() => {
                           game.reset();
                           setConfirmReset(false);
-                          setToast("The flock molted. The perch is empty.");
+                          setToast("The flock was thrown away. Feathers you already hold stayed.");
                         }}
                         className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-scarlet text-sm font-semibold text-paper"
                       >
                         <RotateCcw className="size-4" />
-                        Really molt
+                        Throw it away
                       </button>
                       <button
                         type="button"
@@ -680,11 +809,11 @@ export function ParrotGame() {
                       onClick={() => setConfirmReset(true)}
                       className="h-11 w-full rounded-full border border-scarlet/40 text-sm font-semibold text-scarlet"
                     >
-                      Molt the flock (wipe save)
+                      Throw this flock away
                     </button>
                   )}
                   <p className="mt-2 text-xs text-muted">
-                    Saved in this browser. Molting does not touch anyone else’s flock.
+                    This pays no feathers. Ranks you already bought still apply to the next flock.
                   </p>
                 </div>
               </div>

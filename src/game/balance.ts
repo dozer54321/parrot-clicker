@@ -212,6 +212,7 @@ export type FlockSnapshot = {
   cheatProd: number;
   cheatClick: number;
   buff: { prod: number; click: number; until: number } | null;
+  prestige: Record<string, number>;
 };
 
 export function totalBuildings(buildings: Record<string, number>): number {
@@ -318,6 +319,7 @@ export function productionPerSec(snap: FlockSnapshot, now = Date.now()): number 
     sum += owned * b.pps * buildingSpecificMult(b.id, snap.upgrades);
   }
   sum *= globalMult(snap.upgrades);
+  sum *= prestigeProdMult(snap.prestige);
   sum *= snap.cheatProd > 0 ? snap.cheatProd : 1;
   const buff = snap.buff;
   if (buff && buff.until > now) sum *= buff.prod;
@@ -329,6 +331,7 @@ export function buildingShare(id: BuildingId, snap: FlockSnapshot, now = Date.no
   if (!b) return 0;
   const owned = snap.buildings[id] ?? 0;
   let each = b.pps * buildingSpecificMult(id, snap.upgrades) * globalMult(snap.upgrades);
+  each *= prestigeProdMult(snap.prestige);
   each *= snap.cheatProd > 0 ? snap.cheatProd : 1;
   const buff = snap.buff;
   if (buff && buff.until > now) each *= buff.prod;
@@ -338,8 +341,9 @@ export function buildingShare(id: BuildingId, snap: FlockSnapshot, now = Date.no
 export function clickValue(snap: FlockSnapshot, now = Date.now()): number {
   const buff = snap.buff && snap.buff.until > now ? snap.buff : null;
   const pps = productionPerSec({ ...snap, buff: null }, now);
-  let value = clickMult(snap.upgrades);
-  value += pps * clickPct(snap.upgrades);
+  let value = 1 + prestigeClickFlat(snap.prestige);
+  value *= clickMult(snap.upgrades);
+  value += pps * (clickPct(snap.upgrades) + prestigeClickPct(snap.prestige));
   value *= snap.cheatClick > 0 ? snap.cheatClick : 1;
   if (buff) value *= buff.click;
   return value;
@@ -358,4 +362,101 @@ export const NEWS = [
   "A golden parrot was seen. Witnesses became unreliable immediately.",
   "Empire tailors overwhelmed by orders for tiny capes.",
   "Backyard aviary gossip remains the region’s best newspaper.",
+  "A clean molt leaves feathers. An opened drawer leaves none.",
 ];
+
+/** First feather at 1 million parrots gathered this run, then the cube root. */
+export const PRESTIGE_SCALE = 1_000_000;
+
+export type PrestigeDef = {
+  id: string;
+  name: string;
+  blurb: string;
+  max: number;
+  /** Feathers to buy the next rank. `level` is how many ranks are already owned. */
+  cost: (level: number) => number;
+};
+
+export const PRESTIGE: PrestigeDef[] = [
+  {
+    id: "memory",
+    name: "Flock Memory",
+    blurb: "Every roost makes 15% more parrots per rank, this run and the next.",
+    max: 20,
+    cost: (level) => level + 1,
+  },
+  {
+    id: "beak",
+    name: "Remembered Beak",
+    blurb: "Taps start one parrot stronger per rank. Tricks multiply that.",
+    max: 25,
+    cost: (level) => 1 + Math.floor(level / 2),
+  },
+  {
+    id: "echo",
+    name: "Old Chorus",
+    blurb: "Each tap also pulls 1% of roost output per rank.",
+    max: 10,
+    cost: (level) => 2 + level,
+  },
+  {
+    id: "seeds",
+    name: "Seed Memory",
+    blurb: "The next molt begins with one more seed dish. Not this flock.",
+    max: 15,
+    cost: (level) => 2 + level,
+  },
+  {
+    id: "egg",
+    name: "Nest Egg",
+    blurb: "The next molt starts with a pile already in the bank. Not this flock.",
+    max: 10,
+    cost: (level) => 1 + level,
+  },
+  {
+    id: "eye",
+    name: "Keen Eye",
+    blurb: "Golden parrots visit 8% sooner per rank, down to half the wait.",
+    max: 6,
+    cost: (level) => 3 + level,
+  },
+];
+
+export function feathersFromEarned(earned: number): number {
+  if (!(earned >= PRESTIGE_SCALE)) return 0;
+  return Math.floor(Math.cbrt(earned / PRESTIGE_SCALE));
+}
+
+export function nextFeatherAt(earned: number): number {
+  const next = feathersFromEarned(earned) + 1;
+  return Math.ceil(next ** 3 * PRESTIGE_SCALE);
+}
+
+export function prestigeLevel(levels: Record<string, number> | undefined, id: string): number {
+  return levels?.[id] ?? 0;
+}
+
+export function prestigeProdMult(levels: Record<string, number> | undefined): number {
+  return 1 + 0.15 * prestigeLevel(levels, "memory");
+}
+
+export function prestigeClickFlat(levels: Record<string, number> | undefined): number {
+  return prestigeLevel(levels, "beak");
+}
+
+export function prestigeClickPct(levels: Record<string, number> | undefined): number {
+  return 0.01 * prestigeLevel(levels, "echo");
+}
+
+export function goldenDelayScale(levels: Record<string, number> | undefined): number {
+  return Math.max(0.5, 1 - 0.08 * prestigeLevel(levels, "eye"));
+}
+
+export function nestEgg(level: number): number {
+  if (level <= 0) return 0;
+  return Math.floor(100 * 4 ** (level - 1));
+}
+
+export function starterSeeds(level: number): number {
+  return Math.max(0, level);
+}

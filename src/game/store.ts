@@ -2,14 +2,19 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
   BUILDINGS,
+  PRESTIGE,
   type BuildingId,
   type FlockSnapshot,
   UPGRADES,
   bulkCost,
   clickValue,
+  feathersFromEarned,
+  goldenDelayScale,
   maxAffordable,
+  nestEgg,
   productionPerSec,
   requirementMet,
+  starterSeeds,
 } from "./balance";
 import { formatFlock } from "./format";
 
@@ -46,6 +51,11 @@ type Data = {
   startedAt: number;
   goldenClicks: number;
   cheatsUsed: number;
+  /** Parrots actually produced this run. Cheats and the nest egg do not count. */
+  runEarned: number;
+  feathers: number;
+  molts: number;
+  prestige: Record<string, number>;
 };
 
 type Live = {
@@ -69,7 +79,12 @@ type Actions = {
   giftUpgrades: () => void;
   summonGolden: () => void;
   claimGolden: () => string | null;
+  /** Wipe the run. Keeps feathers. Pays nothing. */
   reset: () => void;
+  /** Pay feathers for a permanent rank. */
+  buyPrestige: (id: string) => void;
+  /** Reset a clean run and bank feathers. Returns feathers gained, or 0. */
+  molt: () => number;
 };
 
 export type GameState = Data & Live & Actions;
@@ -81,6 +96,12 @@ function emptyBuildings(): Record<string, number> {
   const buildings: Record<string, number> = {};
   for (const b of BUILDINGS) buildings[b.id] = 0;
   return buildings;
+}
+
+function emptyPrestige(): Record<string, number> {
+  const levels: Record<string, number> = {};
+  for (const u of PRESTIGE) levels[u.id] = 0;
+  return levels;
 }
 
 function freshData(now = Date.now()): Data {
@@ -95,13 +116,41 @@ function freshData(now = Date.now()): Data {
     cheatClick: 1,
     buff: null,
     golden: null,
-    nextGoldenAt: now + 35_000 + Math.floor(Math.random() * 40_000),
+    nextGoldenAt: scheduleGolden(now, {}),
     lastTick: now,
     muted: false,
     buyQty: 1,
     startedAt: now,
     goldenClicks: 0,
     cheatsUsed: 0,
+    runEarned: 0,
+    feathers: 0,
+    molts: 0,
+    prestige: emptyPrestige(),
+  };
+}
+
+type Kept = {
+  muted: boolean;
+  feathers: number;
+  molts: number;
+  prestige: Record<string, number>;
+};
+
+function beginRun(kept: Kept, now = Date.now()): Data {
+  const data = freshData(now);
+  const buildings = emptyBuildings();
+  const seeds = starterSeeds(kept.prestige.seeds ?? 0);
+  if (seeds > 0) buildings.seed = seeds;
+  return {
+    ...data,
+    parrots: nestEgg(kept.prestige.egg ?? 0),
+    buildings,
+    muted: kept.muted,
+    feathers: kept.feathers,
+    molts: kept.molts,
+    prestige: { ...emptyPrestige(), ...kept.prestige },
+    nextGoldenAt: scheduleGolden(now, kept.prestige),
   };
 }
 
@@ -112,6 +161,7 @@ function snap(data: Data): FlockSnapshot {
     cheatProd: data.cheatProd,
     cheatClick: data.cheatClick,
     buff: data.buff,
+    prestige: data.prestige,
   };
 }
 
@@ -141,8 +191,13 @@ function rollBuff(now: number): { kind: "prod" | "click" | "windfall" | "both"; 
   };
 }
 
-function scheduleGolden(now: number): number {
-  return now + 45_000 + Math.floor(Math.random() * 90_000);
+function scheduleGolden(now: number, prestige: Record<string, number> = {}): number {
+  const wait = Math.floor((45_000 + Math.floor(Math.random() * 90_000)) * goldenDelayScale(prestige));
+  return now + Math.max(8_000, wait);
+}
+
+export function runIsClean(state: Pick<Data, "cheatsUsed" | "cheatProd" | "cheatClick">): boolean {
+  return state.cheatsUsed === 0 && state.cheatProd === 1 && state.cheatClick === 1;
 }
 
 export function quoteFor(state: Data, id: BuildingId): { qty: number; cost: number } {
@@ -178,10 +233,11 @@ export const useGame = create<GameState>()(
           appliedOffline: true,
           parrots: s.parrots + amount,
           lifetime: s.lifetime + amount,
+          runEarned: s.runEarned + amount,
           lastTick: now,
           buff,
           golden: s.golden && s.golden.until > now ? s.golden : null,
-          nextGoldenAt: s.nextGoldenAt > now ? s.nextGoldenAt : scheduleGolden(now),
+          nextGoldenAt: s.nextGoldenAt > now ? s.nextGoldenAt : scheduleGolden(now, s.prestige),
           away: amount > 1 ? { amount, seconds: grantSec } : null,
         });
       },
@@ -195,7 +251,7 @@ export const useGame = create<GameState>()(
         let nextGoldenAt = s.nextGoldenAt;
         if (golden && golden.until <= now) {
           golden = null;
-          nextGoldenAt = scheduleGolden(now);
+          nextGoldenAt = scheduleGolden(now, s.prestige);
         }
         if (!golden && now >= nextGoldenAt) {
           golden = { id: now, until: now + GOLDEN_LIFE };
@@ -209,6 +265,7 @@ export const useGame = create<GameState>()(
         set({
           parrots: s.parrots + gain,
           lifetime: s.lifetime + gain,
+          runEarned: s.runEarned + gain,
           lastTick: now,
           buff,
           golden,
@@ -225,6 +282,7 @@ export const useGame = create<GameState>()(
           lifetime: s.lifetime + gain,
           handmade: s.handmade + gain,
           clicks: s.clicks + 1,
+          runEarned: s.runEarned + gain,
         });
         return gain;
       },
@@ -322,39 +380,92 @@ export const useGame = create<GameState>()(
         let note = rolled.note;
         let parrots = s.parrots;
         let lifetime = s.lifetime;
+        let runEarned = s.runEarned;
         let buff: Buff | null = rolled.buff ?? (s.buff && s.buff.until > now ? s.buff : null);
         if (rolled.kind === "windfall") {
           const pile = Math.max(100, clickValue(snap(s)) * 13 + productionPerSec(snap(s)) * 900);
           parrots += pile;
           lifetime += pile;
+          runEarned += pile;
           note = `Windfall — ${formatFlock(pile)} parrots hit the perch.`;
           buff = s.buff && s.buff.until > now ? s.buff : null;
         }
         set({
           parrots,
           lifetime,
+          runEarned,
           buff,
           golden: null,
-          nextGoldenAt: scheduleGolden(now),
+          nextGoldenAt: scheduleGolden(now, s.prestige),
           goldenClicks: s.goldenClicks + 1,
         });
         return note;
       },
 
       reset: () => {
-        const muted = get().muted;
+        const s = get();
         set({
-          ...freshData(),
-          muted,
+          ...beginRun(
+            { muted: s.muted, feathers: s.feathers, molts: s.molts, prestige: s.prestige },
+            Date.now(),
+          ),
           appliedOffline: true,
           away: null,
         });
       },
+
+      buyPrestige: (id: string) => {
+        const def = PRESTIGE.find((u) => u.id === id);
+        if (!def) return;
+        const s = get();
+        const level = s.prestige[id] ?? 0;
+        if (level >= def.max) return;
+        const cost = def.cost(level);
+        if (s.feathers < cost) return;
+        set({
+          feathers: s.feathers - cost,
+          prestige: { ...s.prestige, [id]: level + 1 },
+        });
+      },
+
+      molt: () => {
+        const s = get();
+        if (!runIsClean(s)) return 0;
+        const gain = feathersFromEarned(s.runEarned);
+        if (gain < 1) return 0;
+        set({
+          ...beginRun(
+            {
+              muted: s.muted,
+              feathers: s.feathers + gain,
+              molts: s.molts + 1,
+              prestige: s.prestige,
+            },
+            Date.now(),
+          ),
+          appliedOffline: true,
+          away: null,
+        });
+        return gain;
+      },
     }),
     {
       name: SAVE_KEY,
-      version: 1,
+      version: 2,
       skipHydration: true,
+      migrate: (persisted, version) => {
+        const data = persisted as Data;
+        if (version < 2) {
+          return {
+            ...data,
+            feathers: 0,
+            molts: 0,
+            prestige: emptyPrestige(),
+            runEarned: typeof data.lifetime === "number" ? data.lifetime : 0,
+          };
+        }
+        return data;
+      },
       partialize: (state) => ({
         parrots: state.parrots,
         lifetime: state.lifetime,
@@ -373,6 +484,10 @@ export const useGame = create<GameState>()(
         startedAt: state.startedAt,
         goldenClicks: state.goldenClicks,
         cheatsUsed: state.cheatsUsed,
+        runEarned: state.runEarned,
+        feathers: state.feathers,
+        molts: state.molts,
+        prestige: state.prestige,
       }),
     },
   ),
